@@ -80,8 +80,8 @@
 
         /* Exact physical dimensions for layout */
         .a4-page {
-            width: 8.27in;
-            height: 11.69in;
+            width: 210mm;
+            height: 297mm;
             background: white;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
             padding-top: 1in;
@@ -92,22 +92,13 @@
         .photo-row {
             display: flex;
             justify-content: center;
-            /* 
-              4 photos * 2in = 8in. 
-              A4 width is 8.27in.
-              We need 0.27in of total remaining space.
-              Gap between 4 photos = 3 gaps.
-              Let's use 0.05in for gap (total 0.15in).
-              Remaining margin for left+right = 8.27 - 8.15 = 0.12in (0.06in per side).
-              Flex center handles the outer margins automatically.
-            */
-            gap: 0.05in; 
+            gap: 1.5mm; 
             width: 100%;
         }
 
         .photo {
-            width: 2in;
-            height: 3in;
+            width: 2in !important;
+            height: 3in !important;
             object-fit: cover;
             border: 1px dashed #ccc; /* Tiny guideline for cutting */
             box-sizing: border-box;
@@ -176,6 +167,21 @@
                         <option value="net1">Network Printer 1 (Kiosk-A)</option>
                         <option value="net2">Network Printer 2 (Kiosk-B)</option>
                     </select>
+                </div>
+
+                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-2 mt-4 rounded-md">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                            </svg>
+                        </div>
+                        <div class="ml-3">
+                            <p class="text-sm text-yellow-800">
+                                <strong>Important Print Settings:</strong> When the print dialog opens, ensure you set <strong>Margins to "None"</strong> and <strong>Scale to "100%" (or Default)</strong> to guarantee accurate 2" x 3" photo sizes.
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
                 <button id="btn-generate" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors focus:ring-4 focus:ring-blue-300">
