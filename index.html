@@ -6,6 +6,7 @@
     <title>Kiosk Photo Printer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <style>
@@ -263,30 +264,19 @@
     <div id="global-loader" class="fixed inset-0 bg-white/90 z-[100] flex items-center justify-center">
         <div class="flex flex-col items-center">
             <svg class="w-10 h-10 text-blue-600 animate-spin mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-            <p class="text-gray-600 font-medium">Connecting to secure kiosk server...</p>
+            <p id="loader-text" class="text-gray-600 font-medium">Initializing...</p>
         </div>
     </div>
 
-    <!-- Firebase Scripts -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Environment variables
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'kiosk-printer-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            // Fallback config normally goes here if outside the immersive, 
-            // but we rely on the injected __firebase_config.
-        };
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let app, db, auth;
-        let currentSessionId = null;
-        let unsubscribeSnapshot = null;
+    <!-- PeerJS Scripts -->
+    <script>
+        let peer = null;
+        let mobileConnection = null;
+        let desktopQuality = 'color-std'; // default
 
         // UI Elements
         const globalLoader = document.getElementById('global-loader');
+        const loaderText = document.getElementById('loader-text');
         const desktopUi = document.getElementById('desktop-ui');
         const mobileUi = document.getElementById('mobile-ui');
         const setupFormContainer = document.getElementById('setup-form-container');
@@ -296,107 +286,69 @@
         const btnGenerate = document.getElementById('btn-generate');
         const btnCancel = document.getElementById('btn-cancel');
         const qualitySelect = document.getElementById('quality-select');
-        const printerSelect = document.getElementById('printer-select');
         const fileInput = document.getElementById('file-input');
         
         // Print preview elements
         const a4Page = document.getElementById('a4-page');
         const photoElements = document.querySelectorAll('.photo');
 
+        // Mobile specific sections
+        const stateUpload = document.getElementById('mobile-upload-state');
+        const stateLoading = document.getElementById('mobile-loading-state');
+        const stateSuccess = document.getElementById('mobile-success-state');
+
         // Toast
         const toast = document.getElementById('toast');
         function showToast(message, isError = false) {
             toast.textContent = message;
-            toast.className = `toast fixed bottom-4 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-full shadow-lg z-50 text-sm font-medium ${isError ? 'bg-red-600' : 'bg-gray-800'} text-white`;
-            toast.classList.add('show');
+            toast.className = `toast fixed bottom-4 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-full shadow-lg z-50 text-sm font-medium ${isError ? 'bg-red-600' : 'bg-gray-800'} text-white show`;
             setTimeout(() => toast.classList.remove('show'), 3000);
-        }
-
-        // Generate Random ID
-        function generateSessionId() {
-            return Math.random().toString(36).substring(2, 8).toUpperCase();
-        }
-
-        // Get Firestore document path (Rule 1 strictly followed)
-        function getSessionDocRef(sessionId) {
-            // Path: artifacts/{appId}/public/data/sessions/{sessionId}
-            return doc(db, 'artifacts', appId, 'public', 'data', 'sessions', sessionId);
         }
 
         // Initialization
         async function init() {
-            try {
-                if(Object.keys(firebaseConfig).length === 0) {
-                    throw new Error("Firebase configuration missing.");
-                }
-                
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
+            const urlParams = new URLSearchParams(window.location.search);
+            const targetPeerId = urlParams.get('peerId');
 
-                // Auth Rule 3: Must auth before anything else
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                // Check URL for session
-                const urlParams = new URLSearchParams(window.location.search);
-                const sessionParam = urlParams.get('session');
-
-                if (sessionParam) {
-                    // MODE 2: Mobile Upload
-                    currentSessionId = sessionParam;
-                    desktopUi.classList.add('hidden');
-                    mobileUi.classList.remove('hidden');
-                    setupMobileUpload();
-                } else {
-                    // MODE 1: Desktop Setup
-                    mobileUi.classList.add('hidden');
-                    desktopUi.classList.remove('hidden');
-                    desktopUi.classList.add('flex');
-                }
-
+            if (targetPeerId) {
+                // MODE 2: Mobile Upload
+                desktopUi.classList.add('hidden');
+                mobileUi.classList.remove('hidden');
+                mobileUi.classList.add('flex');
+                setupMobileMode(targetPeerId);
+            } else {
+                // MODE 1: Desktop Setup
+                mobileUi.classList.add('hidden');
+                desktopUi.classList.remove('hidden');
+                desktopUi.classList.add('flex');
                 globalLoader.style.display = 'none';
-
-            } catch (error) {
-                console.error("Initialization Error:", error);
-                showToast("Failed to connect to servers. Check config.", true);
-                globalLoader.innerHTML = `<div class="text-red-600 p-4 bg-red-50 rounded-lg max-w-sm text-center">Initialization failed: ${error.message}</div>`;
             }
         }
 
         // --- DESKTOP LOGIC ---
-
-        btnGenerate.addEventListener('click', async () => {
-            if (!auth.currentUser) return;
-
+        btnGenerate.addEventListener('click', () => {
             btnGenerate.disabled = true;
             btnGenerate.innerHTML = 'Generating...';
-
-            currentSessionId = generateSessionId();
-            const sessionRef = getSessionDocRef(currentSessionId);
             
-            const printConfig = {
-                quality: qualitySelect.value,
-                printer: printerSelect.value,
-                createdAt: new Date().toISOString(),
-                status: 'waiting', // waiting, received
-                image: null
-            };
+            // Save selected quality for when image arrives
+            desktopQuality = qualitySelect.value;
+            
+            globalLoader.style.display = 'flex';
+            if(loaderText) loaderText.textContent = "Connecting to P2P network...";
 
-            try {
-                // Create the session document
-                await setDoc(sessionRef, printConfig);
+            // Initialize PeerJS for desktop
+            peer = new Peer(); 
+
+            peer.on('open', (id) => {
+                globalLoader.style.display = 'none';
                 
                 // Switch UI
                 setupFormContainer.classList.add('hidden');
                 qrContainer.classList.remove('hidden');
                 
-                // Generate QR Code
-                document.getElementById('qrcode').innerHTML = ''; // clear previous
-                const uploadUrl = `${window.location.origin}${window.location.pathname}?session=${currentSessionId}`;
+                // Generate QR Code containing the Peer ID
+                document.getElementById('qrcode').innerHTML = ''; 
+                const uploadUrl = `${window.location.origin}${window.location.pathname}?peerId=${id}`;
                 new QRCode(document.getElementById("qrcode"), {
                     text: uploadUrl,
                     width: 200,
@@ -405,54 +357,42 @@
                     colorLight : "#ffffff",
                     correctLevel : QRCode.CorrectLevel.H
                 });
+            });
 
-                // Start listening for image
-                listenForImage(sessionRef);
+            // Listen for incoming connection from mobile
+            peer.on('connection', (conn) => {
+                conn.on('data', (data) => {
+                    if (data && data.image) {
+                        triggerPrintPreview(data.image, desktopQuality);
+                    }
+                });
+            });
 
-            } catch (error) {
-                console.error("Error creating session:", error);
-                showToast("Failed to create print session.", true);
-                btnGenerate.disabled = false;
-                btnGenerate.innerHTML = 'Generate QR Code';
-            }
+            peer.on('error', (err) => {
+                console.error("PeerJS Error:", err);
+                showToast("Connection error occurred. Try again.", true);
+                globalLoader.style.display = 'none';
+                btnCancel.click();
+            });
         });
 
         btnCancel.addEventListener('click', () => {
-            if (unsubscribeSnapshot) {
-                unsubscribeSnapshot();
-                unsubscribeSnapshot = null;
+            if (peer) {
+                peer.destroy();
+                peer = null;
             }
             qrContainer.classList.add('hidden');
             setupFormContainer.classList.remove('hidden');
             btnGenerate.disabled = false;
             btnGenerate.innerHTML = 'Generate QR Code';
-            currentSessionId = null;
         });
 
-        function listenForImage(sessionRef) {
-            // Rule 3: Error callback required
-            unsubscribeSnapshot = onSnapshot(sessionRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    if (data.status === 'received' && data.image) {
-                        triggerPrintPreview(data.image, data.quality);
-                    }
-                }
-            }, (error) => {
-                console.error("Snapshot error:", error);
-                showToast("Connection to sync server lost.", true);
-            });
-        }
-
         function triggerPrintPreview(base64Image, quality) {
-            // Cleanup listener since we have the photo
-            if (unsubscribeSnapshot) unsubscribeSnapshot();
-
-            // Set body state
+            // Set body state to show A4 container
             document.body.classList.add('mode-preview');
 
             // Apply specific CSS filters based on selected quality
-            a4Page.className = 'a4-page'; // reset
+            a4Page.className = 'a4-page'; // reset classes
             if (quality.includes('bw')) {
                 if(quality.includes('high') || quality.includes('matte')) {
                     a4Page.classList.add('filter-bw-high');
@@ -468,19 +408,16 @@
                 img.src = base64Image;
             });
 
-            // Wait for images to load before printing
+            // Wait for images to render on canvas/DOM before printing
             const imgLoadPromises = Array.from(photoElements).map(img => {
                 return new Promise(resolve => {
                     img.onload = resolve;
-                    img.onerror = resolve; // proceed even on error
+                    img.onerror = resolve; 
                 });
             });
 
             Promise.all(imgLoadPromises).then(() => {
-                // Short timeout to ensure DOM paints
-                setTimeout(() => {
-                    window.print();
-                }, 500);
+                setTimeout(() => window.print(), 500);
             });
         }
 
@@ -490,17 +427,37 @@
 
         document.getElementById('btn-new-session').addEventListener('click', () => {
             document.body.classList.remove('mode-preview');
-            btnCancel.click(); // Reset form
+            btnCancel.click(); 
         });
 
 
         // --- MOBILE LOGIC ---
+        function setupMobileMode(targetId) {
+            if(loaderText) loaderText.textContent = "Connecting to Kiosk...";
+            
+            peer = new Peer();
+            
+            peer.on('open', () => {
+                mobileConnection = peer.connect(targetId);
+                
+                mobileConnection.on('open', () => {
+                    // We are connected directly to the desktop!
+                    globalLoader.style.display = 'none';
+                    showToast("Connected to Kiosk securely!");
+                });
 
-        function setupMobileUpload() {
-            const stateUpload = document.getElementById('mobile-upload-state');
-            const stateLoading = document.getElementById('mobile-loading-state');
-            const stateSuccess = document.getElementById('mobile-success-state');
+                mobileConnection.on('error', () => {
+                    globalLoader.style.display = 'none';
+                    showToast("Failed to connect to Kiosk. Scan again.", true);
+                });
+            });
 
+            peer.on('error', (err) => {
+                globalLoader.style.display = 'none';
+                showToast("Connection failed.", true);
+            });
+
+            // Handle file selection
             fileInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -510,37 +467,35 @@
                     return;
                 }
 
+                if (!mobileConnection || !mobileConnection.open) {
+                    showToast("Not connected to Kiosk!", true);
+                    return;
+                }
+
                 stateUpload.classList.add('hidden');
                 stateLoading.classList.remove('hidden');
 
-                // Compress image before upload to avoid 1MB Firestore limit
-                // A 2x3 print at 300dpi is ~600x900 pixels. We will scale to max 1000px.
-                compressAndEncodeImage(file, 1000, async (base64) => {
+                // Compress image to ensure it transmits over WebRTC smoothly
+                compressAndEncodeImage(file, 1200, (base64) => {
                     try {
-                        const sessionRef = getSessionDocRef(currentSessionId);
+                        // Send data directly to desktop
+                        mobileConnection.send({ image: base64 });
                         
-                        await updateDoc(sessionRef, {
-                            image: base64,
-                            status: 'received',
-                            uploadedAt: new Date().toISOString()
-                        });
-
                         stateLoading.classList.add('hidden');
                         stateSuccess.classList.remove('hidden');
-
                     } catch (error) {
-                        console.error("Upload error:", error);
+                        console.error("Transmission error:", error);
                         stateLoading.classList.add('hidden');
                         stateUpload.classList.remove('hidden');
-                        showToast("Upload failed. The session might be expired.", true);
+                        showToast("Transfer failed. Please try again.", true);
                     }
                 });
             });
         }
 
         /**
-         * Reads file, scales it down via Canvas to ensure it fits in Firestore
-         * document limits (< 1MB) while maintaining print quality for 2x3.
+         * Reads file, scales it down via Canvas to optimize payload size 
+         * while keeping good quality for a 2x3 print.
          */
         function compressAndEncodeImage(file, maxSize, callback) {
             const reader = new FileReader();
@@ -551,7 +506,6 @@
                     let width = img.width;
                     let height = img.height;
 
-                    // Calculate aspect ratio
                     if (width > height) {
                         if (width > maxSize) {
                             height *= maxSize / width;
@@ -569,8 +523,7 @@
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
                     
-                    // Export as JPEG with 85% quality to save space
-                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.90);
                     callback(dataUrl);
                 };
                 img.src = event.target.result;
