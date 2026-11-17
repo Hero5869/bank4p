@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiosk Photo Printer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+
+        /* Modals and Toasts */
+        .toast {
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            opacity: 0;
+            transform: translateY(1rem);
+            pointer-events: none;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Hide print preview by default on screen */
+        .print-preview-container {
+            display: none;
+        }
+        
+        body.mode-preview {
+            background-color: #52525b; /* Dark bg for preview mode */
+        }
+        
+        body.mode-preview .setup-ui {
+            display: none;
+        }
+
+        body.mode-preview .print-preview-container {
+            display: flex;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        /* --- PRINT SPECIFIC STYLES --- */
+        @page {
+            size: A4 portrait;
+            margin: 0; /* Let the content control the margins perfectly */
+        }
+
+        @media print {
+            body {
+                background: white;
+                margin: 0;
+                padding: 0;
+            }
+            .no-print, .setup-ui {
+                display: none !important;
+            }
+            .print-preview-container {
+                display: block !important;
+                padding: 0;
+                margin: 0;
+                background: transparent;
+            }
+            .a4-page {
+                width: 8.27in;
+                height: 11.69in;
+                background: white;
+                box-shadow: none !important;
+                padding-top: 1in; /* Top margin on the page */
+                margin: 0;
+            }
+        }
+
+        /* Exact physical dimensions for layout */
+        .a4-page {
+            width: 8.27in;
+            height: 11.69in;
+            background: white;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            padding-top: 1in;
+            box-sizing: border-box;
+            margin: 0 auto; /* Center on screen in preview */
+        }
+
+        .photo-row {
+            display: flex;
+            justify-content: center;
+            /* 
+              4 photos * 2in = 8in. 
+              A4 width is 8.27in.
+              We need 0.27in of total remaining space.
+              Gap between 4 photos = 3 gaps.
+              Let's use 0.05in for gap (total 0.15in).
+              Remaining margin for left+right = 8.27 - 8.15 = 0.12in (0.06in per side).
+              Flex center handles the outer margins automatically.
+            */
+            gap: 0.05in; 
+            width: 100%;
+        }
+
+        .photo {
+            width: 2in;
+            height: 3in;
+            object-fit: cover;
+            border: 1px dashed #ccc; /* Tiny guideline for cutting */
+            box-sizing: border-box;
+        }
+
+        .filter-bw .photo {
+            filter: grayscale(100%) contrast(1.1);
+        }
+        
+        .filter-high .photo {
+            /* Simulating high quality vibrant colors in preview */
+            filter: saturate(1.2) contrast(1.05);
+        }
+        .filter-bw-high .photo {
+            filter: grayscale(100%) contrast(1.2) brightness(1.05);
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-lg z-50 text-sm font-medium">
+        Notification message
+    </div>
+
+    <!-- DESKTOP SETUP UI -->
+    <div id="desktop-ui" class="setup-ui hidden flex-col items-center justify-center min-h-screen p-4">
+        <div class="max-w-xl w-full bg-white rounded-2xl shadow-xl overflow-hidden">
+            <div class="bg-blue-600 p-6 text-white">
+                <h1 class="text-2xl font-bold">Kiosk Print Setup</h1>
+                <p class="text-blue-100 text-sm mt-1">Configure your print job and scan to upload</p>
+            </div>
+            
+            <div class="p-6 space-y-6" id="setup-form-container">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Page Size</label>
+                        <select disabled class="w-full bg-gray-100 border border-gray-300 text-gray-500 rounded-lg p-2.5 focus:outline-none cursor-not-allowed">
+                            <option>A4 Paper</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Photo Size</label>
+                        <select disabled class="w-full bg-gray-100 border border-gray-300 text-gray-500 rounded-lg p-2.5 focus:outline-none cursor-not-allowed">
+                            <option>2" x 3" (4 per row)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Print Quality</label>
+                    <select id="quality-select" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="color-std">Standard Printing - Color</option>
+                        <option value="bw-std">Standard Printing - B&W</option>
+                        <option value="color-high">High Quality - Color</option>
+                        <option value="bw-high">High Quality - B&W</option>
+                        <option value="color-matte">Matte Paper - High Color</option>
+                        <option value="bw-matte">Matte Paper - High B&W</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Select Printer</label>
+                    <select id="printer-select" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="default">Default System Printer</option>
+                        <option value="net1">Network Printer 1 (Kiosk-A)</option>
+                        <option value="net2">Network Printer 2 (Kiosk-B)</option>
+                    </select>
+                </div>
+
+                <button id="btn-generate" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors focus:ring-4 focus:ring-blue-300">
+                    Generate QR Code
+                </button>
+            </div>
+
+            <!-- QR Code Waiting Area (Hidden initially) -->
+            <div id="qr-container" class="hidden p-6 flex flex-col items-center border-t border-gray-100 bg-gray-50 text-center">
+                <h3 class="text-lg font-semibold text-gray-800 mb-2">Scan with your smartphone</h3>
+                <p class="text-sm text-gray-500 mb-6 max-w-xs">Point your phone's camera at this QR code to securely upload your photo.</p>
+                <div id="qrcode" class="p-3 bg-white rounded-xl shadow-sm border border-gray-200 mb-4"></div>
+                
+                <div class="flex items-center space-x-2 text-blue-600 font-medium text-sm animate-pulse mt-2">
+                    <svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    <span>Waiting for photo...</span>
+                </div>
+                <button id="btn-cancel" class="mt-6 text-sm text-gray-500 hover:text-gray-800 underline">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MOBILE UPLOAD UI -->
+    <div id="mobile-ui" class="setup-ui hidden flex-col items-center justify-center min-h-screen p-4 sm:p-6 bg-white sm:bg-gray-50">
+        <div class="max-w-md w-full bg-white sm:rounded-2xl sm:shadow-xl overflow-hidden text-center p-6 sm:p-8">
+            <div id="mobile-upload-state">
+                <div class="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                    <svg class="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <h2 class="text-2xl font-bold text-gray-900 mb-2">Connected!</h2>
+                <p class="text-gray-500 mb-8">Select a photo from your device to send to the kiosk printer.</p>
+                
+                <div class="relative">
+                    <input type="file" id="file-input" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                    <button class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-4 rounded-xl transition-colors shadow-lg shadow-blue-500/30 flex items-center justify-center space-x-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                        <span>Choose Photo</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Uploading State -->
+            <div id="mobile-loading-state" class="hidden py-10">
+                <svg class="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                <h3 class="text-lg font-semibold text-gray-900">Processing & Sending...</h3>
+                <p class="text-sm text-gray-500 mt-2">Optimizing your photo for print quality.</p>
+            </div>
+
+            <!-- Success State -->
+            <div id="mobile-success-state" class="hidden py-8">
+                <div class="mx-auto w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mb-6 shadow-lg shadow-green-500/40">
+                    <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <h3 class="text-2xl font-bold text-gray-900 mb-2">Sent Successfully!</h3>
+                <p class="text-gray-600">Look at your computer screen. The printing process will begin shortly.</p>
+                
+                <button onclick="window.location.reload()" class="mt-8 text-blue-600 font-medium hover:underline">Upload another photo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PRINT PREVIEW UI (A4 Container) -->
+    <div id="print-layout" class="print-preview-container">
+        <!-- Floating print controls for desktop preview (hidden in actual print) -->
+        <div class="fixed top-4 right-4 no-print bg-white p-4 rounded-xl shadow-xl flex gap-3 z-50">
+            <button id="btn-reprint" class="bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+                Print Again
+            </button>
+            <button id="btn-new-session" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                New Session
+            </button>
+        </div>
+
+        <!-- The physical A4 page representation -->
+        <div id="a4-page" class="a4-page">
+            <div class="photo-row">
+                <img src="" class="photo" alt="Print Photo 1">
+                <img src="" class="photo" alt="Print Photo 2">
+                <img src="" class="photo" alt="Print Photo 3">
+                <img src="" class="photo" alt="Print Photo 4">
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="global-loader" class="fixed inset-0 bg-white/90 z-[100] flex items-center justify-center">
+        <div class="flex flex-col items-center">
+            <svg class="w-10 h-10 text-blue-600 animate-spin mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            <p class="text-gray-600 font-medium">Connecting to secure kiosk server...</p>
+        </div>
+    </div>
+
+    <!-- Firebase Scripts -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Environment variables
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'kiosk-printer-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            // Fallback config normally goes here if outside the immersive, 
+            // but we rely on the injected __firebase_config.
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let currentSessionId = null;
+        let unsubscribeSnapshot = null;
+
+        // UI Elements
+        const globalLoader = document.getElementById('global-loader');
+        const desktopUi = document.getElementById('desktop-ui');
+        const mobileUi = document.getElementById('mobile-ui');
+        const setupFormContainer = document.getElementById('setup-form-container');
+        const qrContainer = document.getElementById('qr-container');
+        
+        // Buttons & Inputs
+        const btnGenerate = document.getElementById('btn-generate');
+        const btnCancel = document.getElementById('btn-cancel');
+        const qualitySelect = document.getElementById('quality-select');
+        const printerSelect = document.getElementById('printer-select');
+        const fileInput = document.getElementById('file-input');
+        
+        // Print preview elements
+        const a4Page = document.getElementById('a4-page');
+        const photoElements = document.querySelectorAll('.photo');
+
+        // Toast
+        const toast = document.getElementById('toast');
+        function showToast(message, isError = false) {
+            toast.textContent = message;
+            toast.className = `toast fixed bottom-4 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-full shadow-lg z-50 text-sm font-medium ${isError ? 'bg-red-600' : 'bg-gray-800'} text-white`;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Generate Random ID
+        function generateSessionId() {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+
+        // Get Firestore document path (Rule 1 strictly followed)
+        function getSessionDocRef(sessionId) {
+            // Path: artifacts/{appId}/public/data/sessions/{sessionId}
+            return doc(db, 'artifacts', appId, 'public', 'data', 'sessions', sessionId);
+        }
+
+        // Initialization
+        async function init() {
+            try {
+                if(Object.keys(firebaseConfig).length === 0) {
+                    throw new Error("Firebase configuration missing.");
+                }
+                
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Auth Rule 3: Must auth before anything else
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Check URL for session
+                const urlParams = new URLSearchParams(window.location.search);
+                const sessionParam = urlParams.get('session');
+
+                if (sessionParam) {
+                    // MODE 2: Mobile Upload
+                    currentSessionId = sessionParam;
+                    desktopUi.classList.add('hidden');
+                    mobileUi.classList.remove('hidden');
+                    setupMobileUpload();
+                } else {
+                    // MODE 1: Desktop Setup
+                    mobileUi.classList.add('hidden');
+                    desktopUi.classList.remove('hidden');
+                    desktopUi.classList.add('flex');
+                }
+
+                globalLoader.style.display = 'none';
+
+            } catch (error) {
+                console.error("Initialization Error:", error);
+                showToast("Failed to connect to servers. Check config.", true);
+                globalLoader.innerHTML = `<div class="text-red-600 p-4 bg-red-50 rounded-lg max-w-sm text-center">Initialization failed: ${error.message}</div>`;
+            }
+        }
+
+        // --- DESKTOP LOGIC ---
+
+        btnGenerate.addEventListener('click', async () => {
+            if (!auth.currentUser) return;
+
+            btnGenerate.disabled = true;
+            btnGenerate.innerHTML = 'Generating...';
+
+            currentSessionId = generateSessionId();
+            const sessionRef = getSessionDocRef(currentSessionId);
+            
+            const printConfig = {
+                quality: qualitySelect.value,
+                printer: printerSelect.value,
+                createdAt: new Date().toISOString(),
+                status: 'waiting', // waiting, received
+                image: null
+            };
+
+            try {
+                // Create the session document
+                await setDoc(sessionRef, printConfig);
+                
+                // Switch UI
+                setupFormContainer.classList.add('hidden');
+                qrContainer.classList.remove('hidden');
+                
+                // Generate QR Code
+                document.getElementById('qrcode').innerHTML = ''; // clear previous
+                const uploadUrl = `${window.location.origin}${window.location.pathname}?session=${currentSessionId}`;
+                new QRCode(document.getElementById("qrcode"), {
+                    text: uploadUrl,
+                    width: 200,
+                    height: 200,
+                    colorDark : "#1f2937",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+
+                // Start listening for image
+                listenForImage(sessionRef);
+
+            } catch (error) {
+                console.error("Error creating session:", error);
+                showToast("Failed to create print session.", true);
+                btnGenerate.disabled = false;
+                btnGenerate.innerHTML = 'Generate QR Code';
+            }
+        });
+
+        btnCancel.addEventListener('click', () => {
+            if (unsubscribeSnapshot) {
+                unsubscribeSnapshot();
+                unsubscribeSnapshot = null;
+            }
+            qrContainer.classList.add('hidden');
+            setupFormContainer.classList.remove('hidden');
+            btnGenerate.disabled = false;
+            btnGenerate.innerHTML = 'Generate QR Code';
+            currentSessionId = null;
+        });
+
+        function listenForImage(sessionRef) {
+            // Rule 3: Error callback required
+            unsubscribeSnapshot = onSnapshot(sessionRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.status === 'received' && data.image) {
+                        triggerPrintPreview(data.image, data.quality);
+                    }
+                }
+            }, (error) => {
+                console.error("Snapshot error:", error);
+                showToast("Connection to sync server lost.", true);
+            });
+        }
+
+        function triggerPrintPreview(base64Image, quality) {
+            // Cleanup listener since we have the photo
+            if (unsubscribeSnapshot) unsubscribeSnapshot();
+
+            // Set body state
+            document.body.classList.add('mode-preview');
+
+            // Apply specific CSS filters based on selected quality
+            a4Page.className = 'a4-page'; // reset
+            if (quality.includes('bw')) {
+                if(quality.includes('high') || quality.includes('matte')) {
+                    a4Page.classList.add('filter-bw-high');
+                } else {
+                    a4Page.classList.add('filter-bw');
+                }
+            } else if (quality.includes('high') || quality.includes('matte')) {
+                a4Page.classList.add('filter-high');
+            }
+
+            // Populate images
+            photoElements.forEach(img => {
+                img.src = base64Image;
+            });
+
+            // Wait for images to load before printing
+            const imgLoadPromises = Array.from(photoElements).map(img => {
+                return new Promise(resolve => {
+                    img.onload = resolve;
+                    img.onerror = resolve; // proceed even on error
+                });
+            });
+
+            Promise.all(imgLoadPromises).then(() => {
+                // Short timeout to ensure DOM paints
+                setTimeout(() => {
+                    window.print();
+                }, 500);
+            });
+        }
+
+        document.getElementById('btn-reprint').addEventListener('click', () => {
+            window.print();
+        });
+
+        document.getElementById('btn-new-session').addEventListener('click', () => {
+            document.body.classList.remove('mode-preview');
+            btnCancel.click(); // Reset form
+        });
+
+
+        // --- MOBILE LOGIC ---
+
+        function setupMobileUpload() {
+            const stateUpload = document.getElementById('mobile-upload-state');
+            const stateLoading = document.getElementById('mobile-loading-state');
+            const stateSuccess = document.getElementById('mobile-success-state');
+
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                if (!file.type.startsWith('image/')) {
+                    showToast("Please select a valid image file.", true);
+                    return;
+                }
+
+                stateUpload.classList.add('hidden');
+                stateLoading.classList.remove('hidden');
+
+                // Compress image before upload to avoid 1MB Firestore limit
+                // A 2x3 print at 300dpi is ~600x900 pixels. We will scale to max 1000px.
+                compressAndEncodeImage(file, 1000, async (base64) => {
+                    try {
+                        const sessionRef = getSessionDocRef(currentSessionId);
+                        
+                        await updateDoc(sessionRef, {
+                            image: base64,
+                            status: 'received',
+                            uploadedAt: new Date().toISOString()
+                        });
+
+                        stateLoading.classList.add('hidden');
+                        stateSuccess.classList.remove('hidden');
+
+                    } catch (error) {
+                        console.error("Upload error:", error);
+                        stateLoading.classList.add('hidden');
+                        stateUpload.classList.remove('hidden');
+                        showToast("Upload failed. The session might be expired.", true);
+                    }
+                });
+            });
+        }
+
+        /**
+         * Reads file, scales it down via Canvas to ensure it fits in Firestore
+         * document limits (< 1MB) while maintaining print quality for 2x3.
+         */
+        function compressAndEncodeImage(file, maxSize, callback) {
+            const reader = new FileReader();
+            reader.onload = function (event) {
+                const img = new Image();
+                img.onload = function () {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+
+                    // Calculate aspect ratio
+                    if (width > height) {
+                        if (width > maxSize) {
+                            height *= maxSize / width;
+                            width = maxSize;
+                        }
+                    } else {
+                        if (height > maxSize) {
+                            width *= maxSize / height;
+                            height = maxSize;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    
+                    // Export as JPEG with 85% quality to save space
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                    callback(dataUrl);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Start App
+        window.addEventListener('DOMContentLoaded', init);
+
+    </script>
+</body>
+</html>
